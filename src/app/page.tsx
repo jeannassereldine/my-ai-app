@@ -1,47 +1,35 @@
 "use client"
 
 import type React from "react"
-import { useChat } from "@ai-sdk/react"
+import { useChat } from "./hooks/use_chat"
 import { useRef, useState, useEffect } from "react"
-import { Paperclip, Send, X, Bot, User, FileText, Download } from "lucide-react"
+import { Upload, X, FileText, AlertCircle, Shield, CheckCircle2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import type { AnalyseLCRequest } from "./models/out"
+import { convertFilesToBase64 } from "./tools/tools"
 
-async function convertFilesToDataURLs(
-  files: FileList,
-): Promise<{ type: "file"; filename: string; mediaType: string; url: string }[]> {
-  return Promise.all(
-    Array.from(files).map(
-      (file) =>
-        new Promise<{
-          type: "file"
-          filename: string
-          mediaType: string
-          url: string
-        }>((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload = () => {
-            resolve({
-              type: "file",
-              filename: file.name,
-              mediaType: file.type,
-              url: reader.result as string,
-            })
-          }
-          reader.onerror = reject
-          reader.readAsDataURL(file)
-        }),
-    ),
-  )
+type DisplayMessage = {
+  id: string
+  role: "user" | "assistant"
+  content: string
+  files?: { name: string; type: string; url: string }[]
 }
 
-export default function Chat() {
-  const [input, setInput] = useState("")
-  const { messages, sendMessage } = useChat()
+export default function LCValidator() {
+  const { events, isStreaming, isSending, error, sendMessage, clearError } = useChat(
+    "http://localhost:8000/chat/analyse_lc_documents",
+  )
   const [files, setFiles] = useState<FileList | undefined>(undefined)
+  const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
+  const [currentInterrupt, setCurrentInterrupt] = useState<{
+    question: string
+    interruptId: string
+  } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -51,26 +39,109 @@ export default function Chat() {
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages])
+  }, [displayMessages, currentInterrupt])
+
+  useEffect(() => {
+    let assistantMessageContent = ""
+
+    events.forEach((event) => {
+      if (event.event === "message") {
+        assistantMessageContent += event.payload
+      } else if (event.event === "interrupt") {
+        setCurrentInterrupt({
+          question: event.payload.question,
+          interruptId: event.payload.interruptId,
+        })
+      } else if (event.event === "done") {
+        if (assistantMessageContent) {
+          setDisplayMessages((prev) => [
+            ...prev,
+            {
+              id: Date.now().toString(),
+              role: "assistant",
+              content: assistantMessageContent,
+            },
+          ])
+          assistantMessageContent = ""
+        }
+      }
+    })
+
+    if (assistantMessageContent && isStreaming) {
+      setDisplayMessages((prev) => {
+        const lastMessage = prev[prev.length - 1]
+        if (lastMessage?.role === "assistant") {
+          return [...prev.slice(0, -1), { ...lastMessage, content: assistantMessageContent }]
+        }
+        return [
+          ...prev,
+          {
+            id: Date.now().toString(),
+            role: "assistant",
+            content: assistantMessageContent,
+          },
+        ]
+      })
+    }
+  }, [events, isStreaming])
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
 
-    if (!input.trim() && (!files || files.length === 0)) return
+    if (!files || files.length === 0) return
 
-    const fileParts = files && files.length > 0 ? await convertFilesToDataURLs(files) : []
+    const userFiles = Array.from(files).map((file) => ({
+      name: file.name,
+      type: file.type,
+      url: URL.createObjectURL(file),
+    }))
 
-    sendMessage({
-      role: "user",
-      parts: [{ type: "text", text: input }, ...fileParts],
-    })
+    setDisplayMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        role: "user",
+        content: "Letter of Credit documents uploaded for validation",
+        files: userFiles,
+      },
+    ])
 
+    try {
+      const { images, documents } = await convertFilesToBase64(files)
+
+      const request: AnalyseLCRequest = {
+        images,
+        documents,
+      }
+
+      await sendMessage(request)
+    } catch (err) {
+      console.error("Failed to send message:", err)
+    }
     setFiles(undefined)
-    setInput("")
-
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
+  }
+
+  const handleInterruptResponse = async (answer: "yes" | "no") => {
+    if (!currentInterrupt) return
+
+    setDisplayMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: currentInterrupt.question,
+      },
+      {
+        id: (Date.now() + 1).toString(),
+        role: "user",
+        content: answer === "yes" ? "Yes" : "No",
+      },
+    ])
+
+    setCurrentInterrupt(null)
   }
 
   const removeFile = (index: number) => {
@@ -87,129 +158,172 @@ export default function Chat() {
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      <header className="border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/50">
-        <div className="max-w-4xl mx-auto px-6 py-4">
-          <div className="flex items-center gap-3">
-            <Avatar className="h-9 w-9">
-              <AvatarFallback className="bg-primary text-primary-foreground">
-                <Bot className="h-5 w-5" />
-              </AvatarFallback>
-            </Avatar>
-            <div>
-              <h1 className="text-lg font-semibold">AI Assistant</h1>
-              <p className="text-xs text-muted-foreground">Always here to help</p>
+      <header className="border-b bg-card shadow-sm">
+        <div className="max-w-5xl mx-auto px-6 py-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Avatar className="h-10 w-10 bg-primary">
+                <AvatarFallback className="bg-primary text-primary-foreground">
+                  <Shield className="h-5 w-5" />
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <h1 className="text-xl font-semibold text-foreground">Letter of Credit Validator</h1>
+                <p className="text-sm text-muted-foreground">
+                  {isStreaming ? "Analyzing documents..." : "Secure document validation"}
+                </p>
+              </div>
             </div>
+            <Badge variant="secondary" className="gap-1.5">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Secure
+            </Badge>
           </div>
         </div>
       </header>
 
       <ScrollArea className="flex-1">
-        <div className="max-w-4xl mx-auto px-4 py-6">
-          {messages.length === 0 && (
-            <div className="flex items-center justify-center min-h-[calc(100vh-16rem)]">
-              <Card className="max-w-md p-8 text-center border-dashed">
-                <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                  <Bot className="w-8 h-8 text-primary" />
+        <div className="max-w-5xl mx-auto px-4 py-8">
+          {error && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>{error}</span>
+                <Button variant="ghost" size="sm" onClick={clearError}>
+                  Dismiss
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {displayMessages.length === 0 && !isStreaming && (
+            <div className="flex items-center justify-center min-h-[calc(100vh-20rem)]">
+              <Card className="max-w-lg p-10 text-center border-2 border-dashed border-border">
+                <div className="mx-auto w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
+                  <Shield className="w-10 h-10 text-primary" />
                 </div>
-                <h2 className="text-xl font-semibold mb-2">Start a conversation</h2>
-                <p className="text-sm text-muted-foreground">
-                  Send a message or attach files to begin chatting with your AI assistant
+                <h2 className="text-2xl font-semibold mb-3 text-foreground">Upload Letter of Credit Documents</h2>
+                <p className="text-muted-foreground leading-relaxed mb-6">
+                  Upload your LC documents for instant validation and compliance checking. Supported formats: PDF, JPG,
+                  PNG
                 </p>
+                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <CheckCircle2 className="h-4 w-4 text-accent" />
+                  <span>Bank-grade security</span>
+                </div>
               </Card>
             </div>
           )}
 
-          <div className="space-y-4">
-            {messages.map((message) => (
+          <div className="space-y-6">
+            {displayMessages.map((message) => (
               <div
                 key={message.id}
-                className={`flex gap-3 ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}
+                className={`flex gap-4 ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}
               >
-                <Avatar className="h-8 w-8 shrink-0">
-                  <AvatarFallback className={message.role === "user" ? "bg-primary text-primary-foreground" : ""}>
-                    {message.role === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                <Avatar className="h-9 w-9 shrink-0">
+                  <AvatarFallback
+                    className={message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}
+                  >
+                    {message.role === "user" ? <Upload className="h-4 w-4" /> : <Shield className="h-4 w-4" />}
                   </AvatarFallback>
                 </Avatar>
 
                 <Card
-                  className={`max-w-[75%] px-4 py-3 ${
+                  className={`max-w-[80%] px-5 py-4 ${
                     message.role === "user"
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-muted border-muted"
+                      ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                      : "bg-card border-border shadow-sm"
                   }`}
                 >
-                  <div className="space-y-2">
-                    {message.parts.map((part, index) => {
-                      if (part.type === "text") {
-                        return (
-                          <p
-                            key={`${message.id}-text-${index}`}
-                            className="text-sm leading-relaxed whitespace-pre-wrap"
-                          >
-                            {part.text}
-                          </p>
-                        )
-                      }
+                  <div className="space-y-3">
+                    {message.content && (
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                    )}
 
-                      if (part.type === "file") {
-                        const isImage = part.mediaType?.startsWith("image/")
+                    {message.files && message.files.length > 0 && (
+                      <div className="space-y-3 mt-3">
+                        {message.files.map((file, index) => {
+                          const isImage = file.type.startsWith("image/")
 
-                        if (isImage) {
+                          if (isImage) {
+                            return (
+                              <div key={index} className="space-y-2">
+                                <img
+                                  src={file.url || "/placeholder.svg"}
+                                  alt={file.name}
+                                  className="max-w-full h-auto rounded-lg border-2 border-border/50"
+                                />
+                                <p className="text-xs opacity-80">{file.name}</p>
+                              </div>
+                            )
+                          }
+
                           return (
-                            <div key={`${message.id}-file-${index}`} className="mt-2">
-                              <img
-                                src={part.url || "/placeholder.svg"}
-                                alt={part.filename}
-                                className="max-w-full h-auto rounded-md border border-border/50"
-                              />
-                              <p className="text-xs mt-1 opacity-70">{part.filename}</p>
+                            <div
+                              key={index}
+                              className={`flex items-center gap-3 p-3 rounded-lg border ${
+                                message.role === "user"
+                                  ? "border-primary-foreground/20 bg-primary-foreground/10"
+                                  : "border-border bg-muted/50"
+                              }`}
+                            >
+                              <FileText className="h-5 w-5 shrink-0" />
+                              <span className="text-sm flex-1 truncate font-medium">{file.name}</span>
                             </div>
                           )
-                        }
-
-                        return (
-                          <a
-                            key={`${message.id}-file-${index}`}
-                            href={part.url}
-                            download={part.filename}
-                            className={`flex items-center gap-2 mt-2 p-2 rounded border ${
-                              message.role === "user"
-                                ? "border-primary-foreground/20 hover:bg-primary-foreground/10"
-                                : "border-border hover:bg-background/50"
-                            } transition-colors`}
-                          >
-                            <FileText className="h-4 w-4 shrink-0" />
-                            <span className="text-xs flex-1 truncate">{part.filename}</span>
-                            <Download className="h-3 w-3 shrink-0" />
-                          </a>
-                        )
-                      }
-
-                      return null
-                    })}
+                        })}
+                      </div>
+                    )}
                   </div>
                 </Card>
               </div>
             ))}
+
+            {currentInterrupt && (
+              <div className="flex gap-4 flex-row">
+                <Avatar className="h-9 w-9 shrink-0">
+                  <AvatarFallback className="bg-muted">
+                    <Shield className="h-4 w-4" />
+                  </AvatarFallback>
+                </Avatar>
+
+                <Card className="max-w-[80%] px-5 py-4 bg-card border-border shadow-sm">
+                  <p className="text-sm leading-relaxed mb-4">{currentInterrupt.question}</p>
+                  <div className="flex gap-3">
+                    <Button
+                      size="sm"
+                      onClick={() => handleInterruptResponse("yes")}
+                      className="bg-primary hover:bg-primary/90"
+                    >
+                      Yes
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => handleInterruptResponse("no")}>
+                      No
+                    </Button>
+                  </div>
+                </Card>
+              </div>
+            )}
           </div>
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
 
-      <div className="border-t bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/50">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <form onSubmit={handleSubmit} className="space-y-3">
+      <div className="border-t bg-card shadow-lg">
+        <div className="max-w-5xl mx-auto px-4 py-6">
+          <form onSubmit={handleSubmit} className="space-y-4">
             {files && files.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {Array.from(files).map((file, index) => (
-                  <Badge key={index} variant="secondary" className="gap-2 pr-1 py-1.5">
-                    <Paperclip className="h-3 w-3" />
-                    <span className="max-w-[200px] truncate">{file.name}</span>
+                  <Badge key={index} variant="secondary" className="gap-2 pr-1.5 py-2 text-sm">
+                    <FileText className="h-3.5 w-3.5" />
+                    <span className="max-w-[250px] truncate">{file.name}</span>
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
-                      className="h-4 w-4 rounded-full hover:bg-background/80"
+                      className="h-5 w-5 rounded-full hover:bg-background/80"
                       onClick={() => removeFile(index)}
                     >
                       <X className="h-3 w-3" />
@@ -219,49 +333,68 @@ export default function Chat() {
               </div>
             )}
 
-            <div className="flex items-end gap-2">
-              <div className="flex-1 relative">
-                <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault()
-                      handleSubmit(e)
+            <div className="flex items-center gap-3">
+              <input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf"
+                ref={fileInputRef}
+                onChange={(event) => {
+                  if (event.target.files) {
+                    const allowedTypes = ["application/pdf", "image/jpeg", "image/png"]
+                    const allowedExtensions = [".pdf", ".jpg", ".jpeg", ".png"]
+
+                    const validFiles = Array.from(event.target.files).filter((file) => {
+                      const isValidType = allowedTypes.includes(file.type)
+                      const hasValidExtension = allowedExtensions.some((ext) => file.name.toLowerCase().endsWith(ext))
+
+                      if (!isValidType && !hasValidExtension) {
+                        console.warn(`File "${file.name}" is not a valid PDF, JPG, or PNG`)
+                        return false
+                      }
+                      return true
+                    })
+
+                    if (validFiles.length > 0) {
+                      const dataTransfer = new DataTransfer()
+                      validFiles.forEach((file) => dataTransfer.items.add(file))
+                      setFiles(dataTransfer.files)
+                    } else {
+                      alert("Please select only PDF, JPG, or PNG files")
                     }
-                  }}
-                  placeholder="Type your message..."
-                  className="w-full resize-none rounded-lg bg-background border px-4 py-3 pr-12 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring min-h-[52px] max-h-[200px]"
-                  rows={1}
-                />
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={(event) => {
-                    if (event.target.files) {
-                      setFiles(event.target.files)
-                    }
-                  }}
-                  multiple
-                  className="hidden"
-                  id="file-upload"
-                />
-                <Button type="button" variant="ghost" size="icon" className="absolute right-2 bottom-2 h-8 w-8" asChild>
-                  <label htmlFor="file-upload" className="cursor-pointer">
-                    <Paperclip className="h-4 w-4" />
-                  </label>
-                </Button>
-              </div>
+                  }
+                }}
+                multiple
+                className="hidden"
+                id="file-upload"
+              />
+
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1 h-14 border-2 border-dashed hover:border-primary hover:bg-primary/5 transition-colors bg-transparent"
+                asChild
+              >
+                <label htmlFor="file-upload" className="cursor-pointer flex items-center justify-center gap-3">
+                  <Upload className="h-5 w-5" />
+                  <span className="font-medium">
+                    {files && files.length > 0 ? "Add More Documents" : "Upload LC Documents"}
+                  </span>
+                </label>
+              </Button>
 
               <Button
                 type="submit"
-                size="icon"
-                className="h-[52px] w-[52px] shrink-0"
-                disabled={!input.trim() && (!files || files.length === 0)}
+                size="lg"
+                className="h-14 px-8 bg-primary hover:bg-primary/90 shadow-sm"
+                disabled={!files || files.length === 0 || isSending || isStreaming}
               >
-                <Send className="h-5 w-5" />
+                <span className="font-semibold">Validate Documents</span>
               </Button>
             </div>
+
+            <p className="text-xs text-center text-muted-foreground">
+              Supported formats: PDF, JPG, PNG • Maximum file size: 10MB per file
+            </p>
           </form>
         </div>
       </div>
