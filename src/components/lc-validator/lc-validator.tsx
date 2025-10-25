@@ -7,13 +7,15 @@ import { MessageList } from "./message-list"
 import { FileUploadForm } from "./file-upload-form"
 import { useChat } from "@/app/hooks/use_chat"
 import { DisplayMessage, InterruptState } from "@/types/chat"
-import { AnalyseLCRequest } from "@/app/models/out"
+import { AnalyseLCRequest, ResumeAnalyseLCRequest } from "@/app/models/out"
 import { convertFilesToBase64 } from "@/app/tools/tools"
 import { removeFileAtIndex } from "@/types/file-utils"
 
 export default function LCValidator() {
+
   const { events, isStreaming, isSending, error, sendMessage, clearError } = useChat(
     "http://localhost:8000/chat/analyse_lc_documents",
+    "http://localhost:8000/chat/resume_analysing_lc_document",
   )
   const [files, setFiles] = useState<FileList | undefined>(undefined)
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
@@ -29,7 +31,8 @@ export default function LCValidator() {
       } else if (event.event === "interrupt") {
         setCurrentInterrupt({
           question: event.payload.question,
-          interruptId: event.payload.interruptId,
+          interrupt_id: event.payload.interrupt_id,
+          thread_id: event.payload.thread_id,
         })
       } else if (event.event === "done") {
         if (assistantMessageContent) {
@@ -103,6 +106,8 @@ export default function LCValidator() {
   const handleInterruptResponse = async (answer: "yes" | "no") => {
     if (!currentInterrupt) return
 
+    console.log(answer)
+
     setDisplayMessages((prev) => [
       ...prev,
       {
@@ -116,7 +121,13 @@ export default function LCValidator() {
         content: answer === "yes" ? "Yes" : "No",
       },
     ])
-
+    console.log('currentInterrupt',currentInterrupt)
+    const request: ResumeAnalyseLCRequest = {
+      thread_id: currentInterrupt.thread_id,
+      answer: answer =='yes' ? true:false,
+      interrupt_id: currentInterrupt.interrupt_id
+    }
+    sendMessage(request,true)
     setCurrentInterrupt(null)
   }
 

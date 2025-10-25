@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AnalyseLCRequest } from "../models/out";
+import { AnalyseLCRequest, isAnalyseLCRequest, ResumeAnalyseLCRequest } from "../models/out";
 import { parseSSE } from "../tools/tools";
 
 
@@ -10,7 +10,7 @@ export type StreamEvent =
     }
     | {
         event: "interrupt";
-        payload: { question: string; interruptId: string, thread_id:string };
+        payload: { question: string; interrupt_id: string, thread_id:string };
     }
     | {
         event: "done";
@@ -18,7 +18,7 @@ export type StreamEvent =
     };
     
 
-export function useChat(streamUrl: string) {
+export function useChat(streamUrl: string, resumeStreamUrl:string ) {
     const [events, setEvents] = useState<StreamEvent[]>([]);
     const [isStreaming, setIsStreaming] = useState(false);
     const [isSending, setIsSending] = useState(false);
@@ -64,12 +64,14 @@ export function useChat(streamUrl: string) {
         }
     };
 
-    const sendMessage = async (request: AnalyseLCRequest) => {
+    const sendMessage = async (request: AnalyseLCRequest | ResumeAnalyseLCRequest, isResume = false) => {
         setIsSending(true);
         setError(null);
         setEvents([]); // Clear previous events
         try {
-            const response = await fetch(streamUrl, {
+            const url = isResume ? resumeStreamUrl : streamUrl;
+
+            const response = await fetch(url, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

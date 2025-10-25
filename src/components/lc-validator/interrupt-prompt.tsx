@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 
 interface InterruptPromptProps {
   question: string
-  onResponse: (answer: "yes" | "no") => void
+  onResponse: (answer: "yes" | "no" ) => void
 }
 
 export function InterruptPrompt({ question, onResponse }: InterruptPromptProps) {

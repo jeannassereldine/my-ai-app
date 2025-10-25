@@ -68,7 +68,7 @@ export function parseSSE(chunk: string): StreamEvent | null {
       console.log(parsedData)
       return {
         event: "interrupt",
-        payload: parsedData as { question: string; interruptId: string , thread_id:string},
+        payload: parsedData as { question: string; interrupt_id: string , thread_id:string},
       };
     }
   } catch (err) {

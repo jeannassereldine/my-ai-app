@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button"
 import { MessageItem } from "./message-item"
 import { InterruptPrompt } from "./interrupt-prompt"
 import { EmptyState } from "./empty-state"
-import type { DisplayMessage, InterruptState } from "@/types/chat"
+import { DisplayMessage, InterruptState } from "@/types/chat"
+
 
 interface MessageListProps {
   messages: DisplayMessage[]

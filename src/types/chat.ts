@@ -7,5 +7,6 @@ export type DisplayMessage = {
 
 export type InterruptState = {
   question: string
-  interruptId: string
+  interrupt_id: string
+  thread_id:string
 } | null
