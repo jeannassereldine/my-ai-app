@@ -1,3 +1,4 @@
+import { StreamEvent } from "../hooks/use_chat";
 import { Document } from "../models/out";
 import { Image } from "../models/out";
 
@@ -36,4 +37,43 @@ export async function convertFilesToBase64(files: FileList): Promise<{
   }
 
   return { images, documents }
+}
+
+
+export function parseSSE(chunk: string): StreamEvent | null {
+  // Extract event name
+  const eventMatch = chunk.match(/event:\s*([^\n]+)/);
+  if (!eventMatch) return null;
+
+  const eventName = eventMatch[1].trim();
+
+  // Extract data line
+  const dataMatch = chunk.match(/data:\s*([\s\S]*)/); // use [\s\S] to match newlines without /s flag
+  if (!dataMatch) return null;
+
+  let rawData = dataMatch[1].trim();
+
+  try {
+    // Parse JSON
+    const parsedData = JSON.parse(rawData);
+
+    // Map to typed StreamEvent
+    if (eventName === "message") {
+      // Expect payload to be a string
+      return { event: "message", payload: parsedData as string };
+    }
+
+    if (eventName === "interrupt") {
+      // Expect payload to have question and interruptId
+      console.log(parsedData)
+      return {
+        event: "interrupt",
+        payload: parsedData as { question: string; interruptId: string , thread_id:string},
+      };
+    }
+  } catch (err) {
+    console.error("Failed to parse SSE data:", rawData, err);
+  }
+
+  return null;
 }
