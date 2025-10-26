@@ -6,13 +6,14 @@ import { Header } from "./header"
 import { MessageList } from "./message-list"
 import { FileUploadForm } from "./file-upload-form"
 import { useChat } from "@/app/hooks/use_chat"
-import { DisplayMessage, InterruptState } from "@/types/chat"
-import { AnalyseLCRequest, ResumeAnalyseLCRequest } from "@/app/models/out"
+import type { DisplayMessage, InterruptState } from "@/types/chat"
+import type { AnalyseLCRequest, ResumeAnalyseLCRequest } from "@/app/models/out"
 import { convertFilesToBase64 } from "@/app/tools/tools"
 import { removeFileAtIndex } from "@/types/file-utils"
+import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item"
+import { Spinner } from "@/components/ui/spinner"
 
 export default function LCValidator() {
-
   const { events, isStreaming, isSending, error, sendMessage, clearError } = useChat(
     "http://localhost:8000/chat/analyse_lc_documents",
     "http://localhost:8000/chat/resume_analysing_lc_document",
@@ -121,13 +122,13 @@ export default function LCValidator() {
         content: answer === "yes" ? "Yes" : "No",
       },
     ])
-    console.log('currentInterrupt',currentInterrupt)
+    console.log("currentInterrupt", currentInterrupt)
     const request: ResumeAnalyseLCRequest = {
       thread_id: currentInterrupt.thread_id,
-      answer: answer =='yes' ? true:false,
-      interrupt_id: currentInterrupt.interrupt_id
+      answer: answer == "yes" ? true : false,
+      interrupt_id: currentInterrupt.interrupt_id,
     }
-    sendMessage(request,true)
+    sendMessage(request, true)
     setCurrentInterrupt(null)
   }
 
@@ -153,14 +154,29 @@ export default function LCValidator() {
         onClearError={clearError}
       />
 
-      <FileUploadForm
-        files={files}
-        isSending={isSending}
-        isStreaming={isStreaming}
-        onFilesChange={setFiles}
-        onSubmit={handleSubmit}
-        onRemoveFile={handleRemoveFile}
-      />
+      {isStreaming && (
+        <div className="px-4 pb-4 ml-8">
+          <Item variant="muted" size="sm">
+            <ItemMedia>
+              <Spinner className="h-5 w-5" />
+            </ItemMedia>
+            <ItemContent>
+              <ItemTitle>Processing your documents...</ItemTitle>
+            </ItemContent>
+          </Item>
+        </div>
+      )}
+
+      {!isStreaming && (
+        <FileUploadForm
+          files={files}
+          isSending={isSending}
+          isStreaming={isStreaming}
+          onFilesChange={setFiles}
+          onSubmit={handleSubmit}
+          onRemoveFile={handleRemoveFile}
+        />
+      )}
     </div>
   )
 }
